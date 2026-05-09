@@ -1,0 +1,126 @@
+# Network Policy
+# Namespace isolation - deny all, allow specific
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: plataformas-web-netpol
+  namespace: plataformas-web
+spec:
+  # Deny all ingress by default (whitelist model)
+  policyTypes:
+    - Ingress
+    - Egress
+  podSelector: {}
+  # Ingress rules
+  ingress:
+    # Allow from ingress controller (Traefik)
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: kube-system
+          podSelector:
+            matchLabels:
+              app: traefik
+      ports:
+        - protocol: TCP
+          port: 3000
+        - protocol: TCP
+          port: 4000
+    # Allow internal communication between app components
+    - from:
+        - podSelector:
+            matchLabels:
+              app: nextjs
+        - podSelector:
+            matchLabels:
+              app: fastify-api
+    # Allow from monitoring tools
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: monitoring
+  # Egress rules
+  egress:
+    # Allow DNS
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+    # Allow to external services (update for your needs)
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 169.254.0.0/16  # AWS metadata
+              - 10.0.0.0/8      # Internal range
+              - 172.16.0.0/12   # Internal range
+              - 192.168.0.0/16  # Internal range
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 80
+---
+# Specific policies for database pods (most restrictive)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: postgres-netpol
+  namespace: plataformas-web
+spec:
+  policyTypes:
+    - Ingress
+    - Egress
+  podSelector:
+    matchLabels:
+      app: postgres
+  ingress:
+    # Only from app tiers
+    - from:
+        - podSelector:
+            matchLabels:
+              app: nextjs
+        - podSelector:
+            matchLabels:
+              app: fastify-api
+      ports:
+        - protocol: TCP
+          port: 5432
+  egress:
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: redis-netpol
+  namespace: plataformas-web
+spec:
+  policyTypes:
+    - Ingress
+    - Egress
+  podSelector:
+    matchLabels:
+      app: redis
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: nextjs
+        - podSelector:
+            matchLabels:
+              app: fastify-api
+      ports:
+        - protocol: TCP
+          port: 6379
+  egress:
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53

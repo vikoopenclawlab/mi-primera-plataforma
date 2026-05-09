@@ -1,0 +1,112 @@
+# Production Docker Compose
+# Optimized for deployment - no source mounts, optimized images
+
+services:
+  # ==========================================================================
+  # Traefik (Reverse Proxy)
+  # ==========================================================================
+  traefik:
+    image: traefik:v3.0
+    container_name: traefik-prod
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /opt/traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - /opt/traefik/acme.json:/acme.json:rw
+      - traefik-certificates:/certs
+    networks:
+      - plataformas-web
+
+  # ==========================================================================
+  # Next.js Frontend (Production Image)
+  # ==========================================================================
+  nextjs:
+    image: ghcr.io/vikoopenclawlab/mi-primera-plataforma/nextjs:latest
+    container_name: nextjs-prod
+    restart: always
+    environment:
+      - NODE_ENV=production
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=${REDIS_URL}
+      - MEILISEARCH_HOST=${MEILISEARCH_HOST}
+      - MEILISEARCH_API_KEY=${MEILISEARCH_API_KEY}
+    # No volumes - all baked into image
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.nextjs-prod.rule=Host(`prod.example.com`)"
+      - "traefik.http.routers.nextjs-prod.entrypoints=websecure"
+      - "traefik.http.routers.nextjs-prod.tls.certresolver=letsencrypt"
+      - "traefik.http.services.nextjs-prod.loadbalancer.server.port=3000"
+    depends_on:
+      - api
+    networks:
+      - plataformas-web
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  # ==========================================================================
+  # Fastify API (Production Image)
+  # ==========================================================================
+  api:
+    image: ghcr.io/vikoopenclawlab/mi-primera-plataforma/fastify:latest
+    container_name: api-prod
+    restart: always
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=${REDIS_URL}
+      - MEILISEARCH_HOST=${MEILISEARCH_HOST}
+      - MEILISEARCH_API_KEY=${MEILISEARCH_API_KEY}
+      - PORT=4000
+      - CORS_ORIGIN=${CORS_ORIGIN}
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.api-prod.rule=Host(`api.prod.example.com`)"
+      - "traefik.http.routers.api-prod.entrypoints=websecure"
+      - "traefik.http.routers.api-prod.tls.certresolver=letsencrypt"
+      - "traefik.http.services.api-prod.loadbalancer.server.port=4000"
+    networks:
+      - plataformas-web
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:4000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+# =============================================================================
+# Networks
+# =============================================================================
+networks:
+  plataformas-web:
+    driver: bridge
+
+# =============================================================================
+# Volumes (persistent)
+# =============================================================================
+volumes:
+  traefik-certificates:

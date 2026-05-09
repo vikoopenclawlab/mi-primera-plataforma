@@ -1,0 +1,37 @@
+# Pod Disruption Budget
+# Ensures at least 1 pod is available during voluntary disruptions
+
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: nextjs-pdb
+  namespace: plataformas-web
+spec:
+  # Always keep at least 1 pod available (for N=2 minimum)
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: nextjs
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: fastify-api-pdb
+  namespace: plataformas-web
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: fastify-api
+---
+# Alternative: use maxUnavailable for higher N
+# apiVersion: policy/v1
+# kind: PodDisruptionBudget
+# metadata:
+#   name: nextjs-pdb
+#   namespace: plataformas-web
+# spec:
+#   maxUnavailable: 1  # Allow 1 pod down during disruption
+#   selector:
+#     matchLabels:
+#       app: nextjs

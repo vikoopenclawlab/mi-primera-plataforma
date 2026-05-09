@@ -1,0 +1,200 @@
+# Kubernetes Deployment Manifest
+# Next.js frontend + Fastify API
+# Rolling update strategy with health probes
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nextjs
+  namespace: plataformas-web
+  labels:
+    app: nextjs
+    tier: frontend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: nextjs
+  # Rolling update - max 25% unavailable, max 1 extra pod
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 25%
+      maxSurge: 1
+  # Wait for pod to be ready before marking deployment complete
+  minReadySeconds: 15
+  template:
+    metadata:
+      labels:
+        app: nextjs
+        tier: frontend
+    spec:
+      # Security context - non-root, read-only filesystem
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: nextjs
+          image: ghcr.io/vikoopenclawlab/mi-primera-plataforma:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3000
+              name: http
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: nextjs-config
+            - secretRef:
+                name: nextjs-secrets
+          # Resource limits for ARM64 + x86 mixed cluster
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          # Health probes
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          startupProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 30
+          # Security - no privileged, read-only root filesystem
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          # Mount emptyDir for tmp and cache
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      # Tolerate mixed cluster nodes (ARM64 + x86)
+      tolerations:
+        - key: "kubernetes.io/arch"
+          operator: "Exists"
+      volumes:
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 128Mi
+---
+# Fastify API Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fastify-api
+  namespace: plataformas-web
+  labels:
+    app: fastify-api
+    tier: backend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: fastify-api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 25%
+      maxSurge: 1
+  minReadySeconds: 10
+  template:
+    metadata:
+      labels:
+        app: fastify-api
+        tier: backend
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: api
+          image: ghcr.io/vikoopenclawlab/mi-primera-plataforma:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 4000
+              name: http
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: api-config
+            - secretRef:
+                name: api-secrets
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 4000
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 4000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 4000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 30
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      tolerations:
+        - key: "kubernetes.io/arch"
+          operator: "Exists"
+      volumes:
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 64Mi

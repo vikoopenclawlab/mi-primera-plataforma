@@ -1,0 +1,94 @@
+name: Cleanup Old Images
+
+on:
+  schedule:
+    # Run weekly on Sunday at 2am UTC
+    - cron: '0 2 * * 0'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run mode'
+        required: false
+        default: 'true'
+        type: boolean
+      retention_days:
+        description: 'Image retention in days'
+        required: false
+        default: '30'
+        type: string
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  RETENTION_DAYS: ${{ inputs.retention_days || '30' }}
+
+jobs:
+  cleanup:
+    name: Cleanup Old Images
+    runs-on: ubuntu-latest
+    if: github.repository == 'vikoopenclawlab/devops'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Get images to clean
+        id: list
+        run: |
+          # Get all tags older than retention period
+          echo "Fetching images older than $RETENTION_DAYS days..."
+
+          # Use gh CLI to list packages
+          TAGS=$(gh api \
+            -H "Accept: application/vnd.github+json" \
+            "/packages/container/${{ env.IMAGE_NAME }}/nextjs/versions" \
+            --jq '.[] | select(.created_at < now | strftime("%Y-%m-%d") | . > (now - (86400 * int($RETENTION_DAYS)))) | .id' \
+            2>/dev/null || echo "")
+
+          echo "tags=$TAGS" >> $GITHUB_OUTPUT
+
+      - name: Report images to delete
+        if: inputs.dry_run == 'true'
+        run: |
+          echo "🔍 Dry run - would delete the following images:"
+          echo "${{ steps.list.outputs.tags }}"
+          echo ""
+          echo "Run without dry-run to actually delete."
+
+      - name: Delete old images
+        if: inputs.dry_run == 'false'
+        run: |
+          echo "🗑️ Deleting images older than $RETENTION_DAYS days..."
+
+          for ID in ${{ steps.list.outputs.tags }}; do
+            echo "Deleting image ID: $ID"
+            gh api --method DELETE \
+              -H "Accept: application/vnd.github+json" \
+              "/packages/container/${{ env.IMAGE_NAME }}/nextjs/versions/$ID"
+          done
+
+      - name: Notify
+        if: always()
+        uses: slackapi/slack-github-action@v1
+        with:
+          payload: |
+            {
+              "text": "🧹 Image cleanup ${{ job.status == 'success' && 'completed' || 'failed' }}",
+              "blocks": [{
+                "type": "section",
+                "text": {
+                  "type": "mrkdwn",
+                  "text": "🧹 *Image Cleanup*\nDry run: ${{ inputs.dry_run == 'true' }}\nImages processed: ${{ steps.list.outputs.tags == '' && '0' || 'multiple' }}"
+                }
+              }]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK

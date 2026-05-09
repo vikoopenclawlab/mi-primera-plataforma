@@ -1,0 +1,15 @@
+{
+  "name": "mi-primera-plataforma-api",
+  "version": "1.0.0",
+  "description": "Fastify API server",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js"
+  },
+  "dependencies": {
+    "fastify": "^4.28.0",
+    "pg": "^8.12.0",
+    "ioredis": "^5.4.1",
+    "meilisearch": "^0.41.0"
+  }
+}

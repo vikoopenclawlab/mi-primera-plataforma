@@ -1,0 +1,59 @@
+# Kubernetes Service Manifest
+# Only Next.js and Fastify API - postgres/redis are shared from viko-apps
+
+---
+# Next.js Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: nextjs
+  namespace: plataformas-web
+  labels:
+    app: nextjs
+spec:
+  type: ClusterIP
+  selector:
+    app: nextjs
+  ports:
+    - name: http
+      port: 3000
+      targetPort: 3000
+      protocol: TCP
+
+---
+# Fastify API Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: fastify-api
+  namespace: plataformas-web
+  labels:
+    app: fastify-api
+spec:
+  type: ClusterIP
+  selector:
+    app: fastify-api
+  ports:
+    - name: http
+      port: 4000
+      targetPort: 4000
+      protocol: TCP
+
+---
+# Meilisearch Service (local to this namespace)
+apiVersion: v1
+kind: Service
+metadata:
+  name: meilisearch
+  namespace: plataformas-web
+  labels:
+    app: meilisearch
+spec:
+  type: ClusterIP
+  selector:
+    app: meilisearch
+  ports:
+    - name: http
+      port: 7700
+      targetPort: 7700
+      protocol: TCP

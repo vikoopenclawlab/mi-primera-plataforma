@@ -1,0 +1,193 @@
+# Local development Docker Compose
+# Next.js + Fastify + Postgres + Redis + Meilisearch + Traefik
+
+services:
+  # ==========================================================================
+  # Reverse Proxy
+  # ==========================================================================
+  traefik:
+    image: traefik:v3.0
+    container_name: traefik
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./traefik/acme.json:/acme.json:rw
+      - traefik-certificates:/certs
+    networks:
+      - plataformas-web
+
+  # ==========================================================================
+  # Next.js Frontend
+  # ==========================================================================
+  nextjs:
+    build:
+      context: ..
+      dockerfile: docker/Containerfile
+    container_name: nextjs-dev
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=development
+      - NEXT_PUBLIC_API_URL=http://api:4000
+      - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD:-devpassword}@postgres:5432/app
+      - REDIS_URL=redis://redis:6379
+      - MEILISEARCH_HOST=http://meilisearch:7700
+      - MEILISEARCH_API_KEY=${MEILISEARCH_KEY:-devkey}
+    volumes:
+      - ..:/app
+      - /app/node_modules
+      - /app/.next
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.nextjs.rule=Host(`localhost`)"
+      - "traefik.http.routers.nextjs.entrypoints=web"
+      - "traefik.http.services.nextjs.loadbalancer.server.port=3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      meilisearch:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    networks:
+      - plataformas-web
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ==========================================================================
+  # Fastify API
+  # ==========================================================================
+  api:
+    image: node:20-alpine
+    container_name: api-dev
+    restart: unless-stopped
+    working_dir: /app
+    command: node server.js
+    environment:
+      - NODE_ENV=development
+      - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD:-devpassword}@postgres:5432/app
+      - REDIS_URL=redis://redis:6379
+      - MEILISEARCH_HOST=http://meilisearch:7700
+      - MEILISEARCH_API_KEY=${MEILISEARCH_KEY:-devkey}
+      - PORT=4000
+      - CORS_ORIGIN=http://localhost:3000
+    volumes:
+      - ..:/app
+      - /app/node_modules
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.api.rule=Host(`localhost`) && PathPrefix(`/api`)"
+      - "traefik.http.routers.api.entrypoints=web"
+      - "traefik.http.services.api.loadbalancer.server.port=4000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - plataformas-web
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:4000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # ==========================================================================
+  # PostgreSQL
+  # ==========================================================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres-dev
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-devpassword}
+      - POSTGRES_DB=app
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    labels:
+      - "traefik.enable=false"
+    networks:
+      - plataformas-web
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # ==========================================================================
+  # Redis
+  # ==========================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: redis-dev
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    ports:
+      - "6379:6379"
+    labels:
+      - "traefik.enable=false"
+    networks:
+      - plataformas-web
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # ==========================================================================
+  # Meilisearch
+  # ==========================================================================
+  meilisearch:
+    image: getmeili/meilisearch:v1.6
+    container_name: meilisearch-dev
+    restart: unless-stopped
+    environment:
+      - MEILI_ENV=development
+      - MEILI_MASTER_KEY=${MEILISEARCH_KEY:-devkey}
+      - MEILI_DB_PATH=/meili_data
+    volumes:
+      - meilisearch-data:/meili_data
+    ports:
+      - "7700:7700"
+    labels:
+      - "traefik.enable=false"
+    networks:
+      - plataformas-web
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:7700/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+# =============================================================================
+# Networks
+# =============================================================================
+networks:
+  plataformas-web:
+    driver: bridge
+
+# =============================================================================
+# Volumes
+# =============================================================================
+volumes:
+  postgres-data:
+  redis-data:
+  meilisearch-data:
+  traefik-certificates:

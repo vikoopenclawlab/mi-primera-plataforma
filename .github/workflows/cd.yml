@@ -1,0 +1,196 @@
+name: CD (Staging)
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: cd-staging-${{ github.ref }}
+  cancel-in-progress: false  # Allow queuing for main branch
+
+env:
+  NODE_VERSION: '20'
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # ===========================================================================
+  # Build and Push Images
+  # ===========================================================================
+  build-and-push:
+    name: Build & Push
+    runs-on: ubuntu-latest
+
+    outputs:
+      nextjs-tag: ${{ steps.meta.outputs.tags }}
+      fastify-tag: ${{ steps.meta.outputs.tags }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Next.js Image
+      - name: Extract Next.js metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/nextjs
+          tags: |
+            type=sha,prefix=sha-
+            type=raw,value=latest
+
+      - name: Build and push Next.js
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./docker/Containerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64,linux/arm64
+          build-args: |
+            SHA=${{ github.sha }}
+
+  # ===========================================================================
+  # Security Scan
+  # ===========================================================================
+  security-scan:
+    name: Trivy Scan
+    runs-on: ubuntu-latest
+    needs: build-and-push
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run Trivy
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ needs.build-and-push.outputs.nextjs-tag }}
+          format: sarif
+          output: trivy-results.sarif
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+
+      - name: Upload to Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
+
+  # ===========================================================================
+  # Deploy to Staging
+  # ===========================================================================
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: [build-and-push, security-scan]
+    environment: staging
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Configure kubectl
+        run: |
+          echo "${{ secrets.KUBE_CONFIG_STAGING }}" | base64 -d > kubeconfig
+          echo "KUBECONFIG=$(pwd)/kubeconfig" >> $GITHUB_ENV
+
+      - name: Deploy to staging
+        run: |
+          # Update image in kustomization
+          kubectl set image deployment/nextjs nextjs=${{ needs.build-and-push.outputs.nextjs-tag }} -n plataformas-web-staging
+
+          # Apply changes
+          kubectl apply -k infra/k8s/overlays/staging
+
+          # Wait for rollout
+          kubectl rollout status deployment/nextjs -n plataformas-web-staging --timeout=600s
+          kubectl rollout status deployment/fastify-api -n plataformas-web-staging --timeout=300s
+
+      - name: Run smoke tests
+        run: |
+          ./template/nextjs-fastify/scripts/smoke-test.sh --env staging
+
+      - name: Notify deployment
+        if: always()
+        uses: slackapi/slack-github-action@v1
+        with:
+          payload: |
+            {
+              "text": "${{ job.status == 'success' && '✅' || '❌' }} Deploy to staging: ${{ job.status }}",
+              "blocks": [{
+                "type": "section",
+                "text": {
+                  "type": "mrkdwn",
+                  "text": "${{ job.status == 'success' && '✅ Deployed to staging' || '❌ Deploy failed' }}\nCommit: <https://github.com/${{ github.repository }}/commit/${{ github.sha }}|${{ github.sha }}>\nAuthor: ${{ github.actor }}"
+                }
+              }]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+
+  # ===========================================================================
+  # Run Database Migrations
+  # ===========================================================================
+  migrate:
+    name: Run Migrations
+    runs-on: ubuntu-latest
+    needs: deploy-staging
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Configure kubectl
+        run: |
+          echo "${{ secrets.KUBE_CONFIG_STAGING }}" | base64 -d > kubeconfig
+
+      - name: Run Prisma migrations
+        run: |
+          kubectl exec -n plataformas-web-staging deploy/api -- \
+            sh -c "npx prisma migrate deploy"
+
+  # ===========================================================================
+  # Generate SBOM
+  # ===========================================================================
+  sbom:
+    name: Generate SBOM
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: always()
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Generate SBOM with Syft
+        uses: anchore/sbom-action@main
+        with:
+          image: ${{ needs.build-and-push.outputs.nextjs-tag }}
+          format: spdx-json
+          output-file: sbom.json
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom.json
+          retention-days: 30

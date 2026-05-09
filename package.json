@@ -1,0 +1,26 @@
+{
+  "name": "mi-primera-plataforma",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "src",
+    "api"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm run dev:next\" \"npm run dev:api\"",
+    "dev:next": "cd src && next dev -p 3000",
+    "dev:api": "cd api && node server.js",
+    "build": "cd src && next build",
+    "start": "cd src && next start",
+    "api": "node api/server.js",
+    "lint": "cd src && next lint",
+    "typecheck": "tsc --noEmit"
+  },
+  "concurrently": "^8.2.0",
+  "workspaces": {
+    "packages": [
+      "src",
+      "api"
+    ]
+  }
+}

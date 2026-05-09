@@ -1,0 +1,89 @@
+# syntax=docker/dockerfile:1
+
+# =============================================================================
+# Stage 1: Next.js Dependencies
+# =============================================================================
+FROM node:20-alpine AS nextjs-deps
+
+RUN apk add --no-cache python3 make g++ && rm -rf /var/cache/apk/*
+
+WORKDIR /app
+
+COPY src/package.json src/
+RUN cd src && npm install --prefer-offline 2>/dev/null || npm install
+
+# =============================================================================
+# Stage 2: Next.js Builder
+# =============================================================================
+FROM node:20-alpine AS nextjs-builder
+
+WORKDIR /app
+
+COPY --from=nextjs-deps /app/src/node_modules ./src/node_modules
+COPY src/ ./src/
+
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV NODE_ENV=production
+
+RUN cd src && npm run build
+
+# =============================================================================
+# Stage 3: API Dependencies
+# =============================================================================
+FROM node:20-alpine AS api-deps
+
+WORKDIR /app
+
+COPY apps/api/package.json apps/api/
+RUN cd apps/api && npm install --prefer-offline 2>/dev/null || npm install
+
+# =============================================================================
+# Stage 4: API Builder
+# =============================================================================
+FROM node:20-alpine AS api-builder
+
+WORKDIR /app
+
+COPY --from=api-deps /app/apps/api/node_modules ./apps/api/node_modules
+COPY apps/api/ ./apps/api/
+
+ENV NODE_ENV=production
+
+# =============================================================================
+# Stage 5: Next.js Runner
+# =============================================================================
+FROM gcr.io/distroless/nodejs20-debian12 AS runner-nextjs
+
+USER nonroot
+WORKDIR /app
+
+COPY --from=nextjs-builder --chown=nonroot:nonroot /app/src/.next /app/.next
+COPY --from=nextjs-builder --chown=nonroot:nonroot /app/src/package.json /app/package.json
+COPY --from=nextjs-builder --chown=nonroot:nonroot /app/src/node_modules /app/node_modules
+
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV NODE_ENV=production
+ENV PORT=3000
+ENV HOSTNAME="0.0.0.0"
+
+EXPOSE 3000
+
+CMD ["node_modules/.bin/next", "start"]
+
+# =============================================================================
+# Stage 6: API Runner
+# =============================================================================
+FROM gcr.io/distroless/nodejs20-debian12 AS runner-api
+
+USER nonroot
+WORKDIR /app
+
+COPY --from=api-deps /app/apps/api/node_modules ./node_modules
+COPY --from=api-builder --chown=nonroot:nonroot /app/apps/api/src ./src
+
+ENV NODE_ENV=production
+ENV PORT=4000
+
+EXPOSE 4000
+
+CMD ["node", "src/server.js"]

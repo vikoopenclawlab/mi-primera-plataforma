@@ -1,0 +1,74 @@
+# Kustomize configuration
+# Base configuration for all environments
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Namespace for all resources
+namespace: plataformas-web
+
+# Common labels for all resources
+commonLabels:
+  app.kubernetes.io/name: plataformas-web
+  app.kubernetes.io/part-of: mi-primera-plataforma
+  app.kubernetes.io/managed-by: kustomize
+
+# Resources to apply
+resources:
+  - deployment.yaml
+  - service.yaml
+  - ingress.yaml
+  - configmap.yaml
+  - secrets.yaml
+  - hpa.yaml
+  - pdb.yaml
+  - networkpolicy.yaml
+
+# Images to patch (version overrides in overlays)
+images:
+  - name: ghcr.io/vikoopenclawlab/mi-primera-plataforma/nextjs
+    newTag: latest
+  - name: ghcr.io/vikoopenclawlab/mi-primera-plataforma/fastify
+    newTag: latest
+
+# Common patches applied to all environments
+patches:
+  # Add monitoring annotations to pods
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: nextjs
+      spec:
+        template:
+          metadata:
+            annotations:
+              prometheus.io/scrape: "true"
+              prometheus.io/port: "3000"
+              prometheus.io/path: "/metrics"
+    target:
+      kind: Deployment
+      name: nextjs
+
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: fastify-api
+      spec:
+        template:
+          metadata:
+            annotations:
+              prometheus.io/scrape: "true"
+              prometheus.io/port: "4000"
+              prometheus.io/path: "/metrics"
+    target:
+      kind: Deployment
+      name: fastify-api
+
+# Replica counts per environment (override in overlays)
+# replicas:
+#   - name: nextjs
+#     count: 2
+#   - name: fastify-api
+#     count: 2
